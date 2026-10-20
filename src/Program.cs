@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Diagnostics;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -16,10 +15,25 @@ namespace PclGuard
         [STAThread]
         static void Main(string[] args)
         {
+            bool isSilent = false;
+            if (args != null)
+            {
+                foreach (string arg in args)
+                {
+                    if (arg.Equals("/silent", StringComparison.OrdinalIgnoreCase) ||
+                        arg.Equals("-s", StringComparison.OrdinalIgnoreCase) ||
+                        arg.Equals("--silent", StringComparison.OrdinalIgnoreCase) ||
+                        arg.Equals("-q", StringComparison.OrdinalIgnoreCase))
+                    {
+                        isSilent = true;
+                        break;
+                    }
+                }
+            }
+
             try
             {
                 string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                string currentExePath = Application.ExecutablePath;
 
                 // 1. 检查并锁定 PCL\Setup.ini 中的 SystemSystemUpdate:3
                 string pclDir = Path.Combine(baseDir, "PCL");
@@ -32,17 +46,15 @@ namespace PclGuard
 
                 // 2. 确定目标文件名
                 string targetExeName = "Plain Craft Launcher.exe";
-                if (string.Equals(Path.GetFileName(currentExePath), targetExeName, StringComparison.OrdinalIgnoreCase))
-                {
-                    targetExeName = "Plain Craft Launcher 2.exe";
-                }
                 string targetExePath = Path.Combine(baseDir, targetExeName);
 
                 // 3. 校验并自愈回退
                 bool needRestore = false;
+                bool wasMissing = false;
                 if (!File.Exists(targetExePath))
                 {
                     needRestore = true;
+                    wasMissing = true;
                 }
                 else
                 {
@@ -57,7 +69,7 @@ namespace PclGuard
 
                 if (needRestore)
                 {
-                    if (File.Exists(targetExePath))
+                    if (!wasMissing && File.Exists(targetExePath))
                     {
                         PerformBackup(baseDir, pclDir, targetExePath);
                     }
@@ -65,26 +77,52 @@ namespace PclGuard
                     RestoreEmbeddedPcl(targetExePath);
                 }
 
-                // 4. 启动目标程序并透传命令行参数
-                ProcessStartInfo psi = new ProcessStartInfo();
-                psi.FileName = targetExePath;
-                psi.WorkingDirectory = baseDir;
-                if (args != null && args.Length > 0)
+                // 4. 纯守护结束通知 (绝不启动任何主程序)
+                if (!isSilent)
                 {
-                    psi.Arguments = string.Join(" ", args);
-                }
-                psi.UseShellExecute = true;
+                    string msg;
+                    if (needRestore)
+                    {
+                        if (wasMissing)
+                        {
+                            msg = "PCL 保护与初始化完成！\n\n" +
+                                  "• 配置状态：已锁定关闭自动更新 (SystemSystemUpdate:3)\n" +
+                                  "• 启动器生成：已从内嵌母本释放基准版本 2.13.1.1";
+                        }
+                        else
+                        {
+                            msg = "PCL 保护与版本回退完成！\n\n" +
+                                  "• 配置状态：已锁定关闭自动更新 (SystemSystemUpdate:3)\n" +
+                                  "• 版本回退：检测到主程序被修改或更新，已自动备份旧文件并恢复至基准版本 2.13.1.1\n" +
+                                  "• 备份目录：PCL\\Backup\\";
+                        }
+                    }
+                    else
+                    {
+                        msg = "PCL 保护与校验完成！\n\n" +
+                              "• 配置状态：已锁定关闭自动更新 (SystemSystemUpdate:3)\n" +
+                              "• 版本校验：吻合基准版本 2.13.1.1 (未被修改)";
+                    }
 
-                Process.Start(psi);
+                    MessageBox.Show(
+                        msg,
+                        "pcl-guard 保护完成",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
-                    "PCL 启动与防更自愈过程中遇到异常:\n" + ex.Message,
-                    "pcl-guard",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning
-                );
+                if (!isSilent)
+                {
+                    MessageBox.Show(
+                        "PCL 守护与校验过程中遇到异常:\n" + ex.Message,
+                        "pcl-guard 异常提示",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                }
             }
         }
 
