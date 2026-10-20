@@ -1,62 +1,81 @@
 # pcl-guard
 
-PCL2 (Plain Craft Launcher 2) 启动守护程序。内嵌 2.13.1.1 官方版本主程序，通过拦截配置锁定关闭自动更新，并在文件发生非预期更新或被修改时自动回退。
+纯净的 Plain Craft Launcher 2 (PCL2) 离线运行环境守护与版本自愈工具。
 
-## 工作机制
+本工具为纯粹的安全防护与校验工具，负责固化防更新配置、比对可执行文件哈希并在异常时自动回退，不负责启动游戏本体。
 
-1. **更新拦截**：启动时读取 `PCL\Setup.ini`，确保 `SystemSystemUpdate` 键值为 `3`。PCL2 在该参数下会关闭所有更新检查与后台下载。文件中的其他配置项保持不变。
-2. **哈希校验与版本自愈**：计算同目录下 `Plain Craft Launcher.exe` 的 SHA256。如果文件缺失或哈希不匹配，程序会先备份当前文件，然后从内嵌资源中释放基准母本。
-3. **覆盖前自动备份**：触发覆盖回退时，现存文件会被复制到 `PCL\Backup\Plain Craft Launcher_时间戳.exe.bak`，同时在同级目录保留一份 `Plain Craft Launcher.exe.bak`。
-4. **标准文件属性**：所有生成与恢复的文件均使用标准系统属性，不附加只读标记。
-5. **单文件便携**：程序内嵌完整的启动器母本二进制数据，复制到任何目录都可以直接运行。
+---
 
-## 技术基准
+## 核心机制
 
-- 内嵌版本：Plain Craft Launcher 2.13.1.1
-- 母本体积：5,750,272 字节
-- 基准 SHA256：`30EB93C62FC51EDE0898648E67455478A3D5A4F279938AE65AEC77B84CB9703F`
-- 运行环境：Windows 7 及更高版本（依赖 .NET Framework 4.5 或以上系统运行时）
+1. **固化离线防更配置**  
+   检查并自动修正 `PCL\Setup.ini`，确保包含 `SystemSystemUpdate:3`。逆向证实该参数在 PCL2 内部对应彻底关闭更新提示与后台下载逻辑。如果配置项不存在则自动新增，已有其他配置项原样保留。
 
-## 使用方法
+2. **基准哈希校验**  
+   比对同目录下 `Plain Craft Launcher.exe` 的 SHA256 哈希值。  
+   - 官方基准版本：2.13.1.1  
+   - 基准 SHA256：`30EB93C62FC51EDE0898648E67455478A3D5A4F279938AE65AEC77B84CB9703F`
 
-将编译生成的 `pcl-guard.exe` 放入 Minecraft 或 PCL 所在目录直接运行。
+3. **覆盖前自动归档备份**  
+   若主程序缺失，直接从内嵌母本释放。若主程序哈希与基准不符，在执行覆盖修复前，自动将现有旧程序复制备份至两处：  
+   - `PCL\Backup\Plain Craft Launcher_{时间戳}.exe.bak`（保留历史记录）  
+   - `Plain Craft Launcher.exe.bak`（快捷备份）
 
-首次在新目录运行时，程序会自动生成 `Plain Craft Launcher.exe` 并写入防更配置文件。后续启动会自动拉起游戏启动器，并透传收到的命令行参数。
+4. **单文件无损自愈**  
+   程序内嵌了 5.75MB 的 2.13.1.1 黄金母本二进制。释放与替换过程中仅覆盖主程序本身，不影响任何游戏存档、MOD 或配置，且保持标准的普通文件属性（不施加只读限制）。
 
-## 构建说明
+5. **纯守护不启动游戏**  
+   校验与修复完毕后直接退出，绝不擅自拉起 PCL2 进程。
 
-本项目使用 Windows 自带的 C# 编译器（csc.exe）编译，不需要安装 Visual Studio。
+---
 
-双击运行根目录下的 `build.bat`，或者在控制台执行：
+## 使用方式
 
-```bat
+### 直接运行
+双击运行 `pcl-guard.exe`：
+- 若版本完好，弹出轻量提示框确认状态后退出。
+- 若版本异常，完成备份并自动回退后弹出恢复提示框。
+
+### 脚本与静默模式
+在批处理或快捷方式中传入静默参数，程序将在后台静默执行检查与自愈，不弹出任何窗口：
+
+```cmd
+pcl-guard.exe /silent
+```
+
+也可以使用 `-s`、`--silent` 或 `-q`。
+
+---
+
+## 源码与编译
+
+项目采用 Windows 原生自带的 C# 编译器，无需安装任何额外开发环境或第三方 SDK。
+
+### 目录结构
+```text
+pcl-guard/
+├── build.bat               # 双击一键编译脚本
+├── build.ps1               # PowerShell 编译脚本
+├── src/
+│   ├── Program.cs          # 纯守护校验与自愈逻辑
+│   ├── PCL_Icon.ico        # PCL 原始高清图标
+│   └── Plain Craft Launcher.exe  # 2.13.1.1 基准母本二进制
+├── bin/
+│   └── pcl-guard.exe       # 编译生成的独立单文件
+└── README.md
+```
+
+### 手动编译
+双击 `build.bat`，或在命令行运行：
+
+```cmd
 build.bat
 ```
 
-也可以手动调用编译器：
+编译脚本会自动定位 Windows 系统自带的 `csc.exe`，将基准二进制作为内嵌资源编译打包为单个独立的 GUI 程序。
 
-```bat
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize+ /out:bin\pcl-guard.exe /win32icon:src\PCL_Icon.ico /resource:"src\Plain Craft Launcher.exe",PCL_Baseline.exe /r:System.dll,System.Windows.Forms.dll,System.Drawing.dll src\Program.cs
-```
-
-编译产物位于 `bin\pcl-guard.exe`。
-
-## 目录结构
-
-```text
-pcl-guard/
-├── .gitignore
-├── LICENSE
-├── README.md
-├── build.bat
-├── src/
-│   ├── Program.cs
-│   ├── PCL_Icon.ico
-│   └── Plain Craft Launcher.exe
-└── bin/
-    └── pcl-guard.exe
-```
+---
 
 ## 许可证
 
-本项目基于 MIT 许可证开源。详见 LICENSE 文件。
+本项目依据 MIT 许可证开源。
