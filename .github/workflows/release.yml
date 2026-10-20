@@ -1,0 +1,72 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build pcl-guard
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build pcl-guard.exe
+        shell: cmd
+        run: |
+          call build.bat
+
+      - name: Verify binary and compute SHA256
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "bin\pcl-guard.exe")) {
+            Write-Error "Build output bin\pcl-guard.exe not found!"
+            exit 1
+          }
+          $item = Get-Item "bin\pcl-guard.exe"
+          $hash = (Get-FileHash -Path "bin\pcl-guard.exe" -Algorithm SHA256).Hash
+          Write-Host "Binary Size: $($item.Length) bytes"
+          Write-Host "Binary SHA256: $hash"
+          "SHA256 (pcl-guard.exe) = $hash" | Out-File -FilePath "bin\sha256.txt" -Encoding utf8
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcl-guard-windows
+          path: |
+            bin/pcl-guard.exe
+            bin/sha256.txt
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $exists = $null
+          try {
+            $exists = gh release view $tag --json tagName 2>$null
+          } catch {}
+
+          if ($exists) {
+            Write-Host "Release $tag already exists, uploading assets..."
+            gh release upload $tag bin\pcl-guard.exe bin\sha256.txt --clobber
+          } else {
+            Write-Host "Creating new release $tag..."
+            gh release create $tag bin\pcl-guard.exe bin\sha256.txt --title "pcl-guard $tag" --generate-notes
+          }

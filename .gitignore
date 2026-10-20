@@ -2,3 +2,6 @@ bin/
 obj/
 *.tmp
 *.bak
+CLAUDE.md
+**/CLAUDE.md
+.claude/
