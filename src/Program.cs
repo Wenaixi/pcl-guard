@@ -51,7 +51,7 @@ namespace PclGuard
                 string pclDir = Path.Combine(baseDir, "PCL");
                 string iniPath = Path.Combine(pclDir, "Setup.ini");
 
-                // 读取 Setup.ini 获取游戏整合包目录 (例如 F:\C\挖掘在地下-1.21.11\.minecraft\)
+                // 读取 Setup.ini 获取游戏整合包目录
                 string gameFolder = GetGameFolderFromIni(iniPath);
 
                 // 1. 检测正在运行的 PCL 主程序及其拉起的子程序 (如 javaw.exe)
@@ -159,7 +159,7 @@ namespace PclGuard
                 if (!isSilent)
                 {
                     MessageBox.Show(
-                        "PCL 守护与校验过程中遇到提示:\n" + ex.Message,
+                        "PCL 守护与校验提示:\n" + ex.Message,
                         "pcl-guard 提示",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Warning
@@ -192,37 +192,44 @@ namespace PclGuard
         {
             Dictionary<int, TargetProcessInfo> matched = new Dictionary<int, TargetProcessInfo>();
             HashSet<int> pclPids = new HashSet<int>();
+            int currentPid = Process.GetCurrentProcess().Id;
 
-            // 1. 查找当前目录下运行的 PCL 主程序
-            foreach (Process p in Process.GetProcesses())
+            // 1. 查找当前目录下运行的 PCL 主程序 (显式 Dispose 释放句柄)
+            Process[] allProcs = Process.GetProcesses();
+            foreach (Process p in allProcs)
             {
                 try
                 {
-                    if (p.Id == Process.GetCurrentProcess().Id) continue;
-
-                    string mainModulePath = string.Empty;
-                    try { mainModulePath = p.MainModule.FileName; } catch { }
-
-                    if (!string.IsNullOrEmpty(mainModulePath))
+                    if (p.Id != currentPid)
                     {
-                        if (string.Equals(mainModulePath, targetExePath, StringComparison.OrdinalIgnoreCase) ||
-                            (string.Equals(p.ProcessName, "Plain Craft Launcher", StringComparison.OrdinalIgnoreCase) &&
-                             mainModulePath.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase)))
+                        string mainModulePath = string.Empty;
+                        try { mainModulePath = p.MainModule.FileName; } catch { }
+
+                        if (!string.IsNullOrEmpty(mainModulePath))
                         {
-                            pclPids.Add(p.Id);
-                            matched[p.Id] = new TargetProcessInfo
+                            if (string.Equals(mainModulePath, targetExePath, StringComparison.OrdinalIgnoreCase) ||
+                                (string.Equals(p.ProcessName, "Plain Craft Launcher", StringComparison.OrdinalIgnoreCase) &&
+                                 mainModulePath.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase)))
                             {
-                                Pid = p.Id,
-                                Name = p.ProcessName + ".exe",
-                                Description = "PCL2 启动器主程序"
-                            };
+                                pclPids.Add(p.Id);
+                                matched[p.Id] = new TargetProcessInfo
+                                {
+                                    Pid = p.Id,
+                                    Name = p.ProcessName + ".exe",
+                                    Description = "PCL2 启动器主程序"
+                                };
+                            }
                         }
                     }
                 }
                 catch { }
+                finally
+                {
+                    p.Dispose();
+                }
             }
 
-            // 2. 借助 Toolhelp32 查找父进程为 PCL 的子进程 (例如由 PCL 启动的 Java)
+            // 2. 借助 Toolhelp32 查找父进程为 PCL 的子进程
             if (pclPids.Count > 0)
             {
                 try
@@ -237,14 +244,16 @@ namespace PclGuard
                         {
                             try
                             {
-                                Process childProc = Process.GetProcessById(childPid);
-                                string desc = childProc.ProcessName.ToLower().Contains("java") ? "Minecraft 游戏进程" : "PCL 启动的子程序";
-                                matched[childPid] = new TargetProcessInfo
+                                using (Process childProc = Process.GetProcessById(childPid))
                                 {
-                                    Pid = childPid,
-                                    Name = childProc.ProcessName + ".exe",
-                                    Description = desc
-                                };
+                                    string desc = childProc.ProcessName.ToLower().Contains("java") ? "Minecraft 游戏进程" : "PCL 启动的子程序";
+                                    matched[childPid] = new TargetProcessInfo
+                                    {
+                                        Pid = childPid,
+                                        Name = childProc.ProcessName + ".exe",
+                                        Description = desc
+                                    };
+                                }
                             }
                             catch { }
                         }
@@ -253,7 +262,7 @@ namespace PclGuard
                 catch { }
             }
 
-            // 3. 针对即使 PCL 已关闭、但由其启动的 Minecraft (javaw.exe/java.exe) 仍在运行的情况进行命令行关联识别
+            // 3. 针对即使 PCL 已关闭、但由其启动的 Minecraft 仍在运行的情况进行命令行关联识别
             try
             {
                 using (ManagementObjectSearcher searcher = new ManagementObjectSearcher("SELECT ProcessId, Name, CommandLine FROM Win32_Process WHERE Name = 'javaw.exe' OR Name = 'java.exe'"))
@@ -264,33 +273,38 @@ namespace PclGuard
                         try
                         {
                             int pid = Convert.ToInt32(mo["ProcessId"]);
-                            if (matched.ContainsKey(pid)) continue;
-
-                            string cmdLine = mo["CommandLine"] as string ?? string.Empty;
-                            string procName = mo["Name"] as string ?? "javaw.exe";
-
-                            bool isOurGame = false;
-                            if (!string.IsNullOrEmpty(gameFolder) && cmdLine.IndexOf(gameFolder, StringComparison.OrdinalIgnoreCase) >= 0)
+                            if (!matched.ContainsKey(pid))
                             {
-                                isOurGame = true;
-                            }
-                            else if (cmdLine.IndexOf(baseDir, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                     cmdLine.IndexOf(".minecraft", StringComparison.OrdinalIgnoreCase) >= 0)
-                            {
-                                isOurGame = true;
-                            }
+                                string cmdLine = mo["CommandLine"] as string ?? string.Empty;
+                                string procName = mo["Name"] as string ?? "javaw.exe";
 
-                            if (isOurGame)
-                            {
-                                matched[pid] = new TargetProcessInfo
+                                bool isOurGame = false;
+                                if (!string.IsNullOrEmpty(gameFolder) && cmdLine.IndexOf(gameFolder, StringComparison.OrdinalIgnoreCase) >= 0)
                                 {
-                                    Pid = pid,
-                                    Name = procName,
-                                    Description = "Minecraft 游戏进程"
-                                };
+                                    isOurGame = true;
+                                }
+                                else if (cmdLine.IndexOf(baseDir, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                         cmdLine.IndexOf(".minecraft", StringComparison.OrdinalIgnoreCase) >= 0)
+                                {
+                                    isOurGame = true;
+                                }
+
+                                if (isOurGame)
+                                {
+                                    matched[pid] = new TargetProcessInfo
+                                    {
+                                        Pid = pid,
+                                        Name = procName,
+                                        Description = "Minecraft 游戏进程"
+                                    };
+                                }
                             }
                         }
                         catch { }
+                        finally
+                        {
+                            mo.Dispose();
+                        }
                     }
                 }
             }
@@ -306,16 +320,18 @@ namespace PclGuard
             {
                 try
                 {
-                    Process p = Process.GetProcessById(t.Pid);
-                    if (!p.HasExited)
+                    using (Process p = Process.GetProcessById(t.Pid))
                     {
-                        p.CloseMainWindow();
+                        if (!p.HasExited)
+                        {
+                            p.CloseMainWindow();
+                        }
                     }
                 }
                 catch { }
             }
 
-            // 等待最长 1.5 秒
+            // 等待最长 0.8 秒让进程自行保存退出
             Thread.Sleep(800);
 
             // 第二步：对于仍未退出的进程强制 Kill，确保释放文件锁
@@ -323,11 +339,13 @@ namespace PclGuard
             {
                 try
                 {
-                    Process p = Process.GetProcessById(t.Pid);
-                    if (!p.HasExited)
+                    using (Process p = Process.GetProcessById(t.Pid))
                     {
-                        p.Kill();
-                        p.WaitForExit(1000);
+                        if (!p.HasExited)
+                        {
+                            p.Kill();
+                            p.WaitForExit(1000);
+                        }
                     }
                 }
                 catch { }
